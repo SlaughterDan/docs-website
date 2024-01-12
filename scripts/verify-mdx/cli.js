@@ -1,6 +1,8 @@
 const colors = require('ansi-colors');
 const cliProgress = require('cli-progress');
 const glob = require('glob');
+
+const ERROR_TYPES = require('./error-types');
 const { verifyImages, verifyMDX } = require('./verify-mdx');
 
 const main = async () => {
@@ -22,25 +24,66 @@ const main = async () => {
   );
   progressBar.start(filePaths.length, 1);
 
-  const results = await verifyMDX(filePaths, {
-    onFileChecked: (_path, i) => progressBar.update(i + 1),
-    onEnd: () => progressBar.stop(),
-  });
+  const allResults = await Promise.all(
+    filePaths.map(async (path, i) => {
+      const result = verifyMDX(path);
+      await progressBar.update(i + 1);
+      return result;
+    })
+  );
+  await progressBar.stop();
 
+  const resultsWithErrors = allResults.filter(
+    (result) => result.errors.length > 0
+  );
+  report(resultsWithErrors);
+};
+
+const report = (results) => {
   console.log(
     colors.magenta(`\n\nFailed MDX file count: `) + `${results.length}`
   );
-  console.log(results);
+  results.forEach((result) => {
+    // mdx error reporting
+    result.errors.forEach((error) => {
+      if (error.type === ERROR_TYPES.FRONTMATTER_ERROR) {
+        console.log(
+          colors.magenta(` Frontmatter error: `) +
+            `${result.filePath} \n
+      ${colors.red(error.reason)}
+    ${error.mark.snippet}`
+        );
+      }
 
-  if (mdxErrors.length > 0) {
-    console.log(colors.yellow(`\n\n❌ Found ${mdxErrors.length} MDX errors`));
-    mdxErrors.forEach((error, i) =>
-      console.error(colors.magenta(`\n\nError ${i + 1}: `) + `${error}`)
-    );
-    process.exitCode = 1;
-  } else {
-    console.log('\n\n🎉 No MDX issues found');
-  }
+      if (error.type === ERROR_TYPES.FRONTMATTER_FIELD_ERROR) {
+        console.log(
+          colors.magenta(` Frontmatter field error: `) +
+            `${result.filePath} \n
+      ${colors.red(error.message)}`
+        );
+      }
+
+      if (error.type === ERROR_TYPES.MDX_ERROR) {
+        console.log(
+          colors.magenta(` MDX error: `) +
+            `${result.filePath} \n
+      ${colors.red(error.reason)}
+    line: ${error.line}
+    column: ${error.column}`
+        );
+      }
+
+      if (error.type === ERROR_TYPES.VALIDATION_ERROR) {
+        console.log(
+          colors.magenta(` MDX validation error: `) +
+            `${result.filePath} \n
+      ${colors.red(error.reason)}
+    line: ${error.line}
+    column: ${error.column}`
+        );
+      }
+    });
+  });
 };
 
 const progressBar = new cliProgress.SingleBar(

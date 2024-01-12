@@ -170,9 +170,10 @@ module.exports = {
       node,
       'a',
       {
-        className: className.reduce((arr, prop) => [...arr, `btn-${prop}`], [
-          'btn',
-        ]),
+        className: className.reduce(
+          (arr, prop) => [...arr, `btn-${prop}`],
+          ['btn']
+        ),
         href: findAttribute('to', node),
       },
       [u('text', toString(node))]

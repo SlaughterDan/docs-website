@@ -1,6 +1,40 @@
 const { curry } = require('lodash/fp');
+const remarkFrontmatter = require('remark-frontmatter');
+const remarkMdx = require('remark-mdx');
+const remarkMdxjs = require('remark-mdxjs');
+const remarkParse = require('remark-parse');
+const remarkStringify = require('remark-stringify');
+const unified = require('unified');
+const visit = require('unist-util-visit');
 const convert = require('unist-util-is/convert');
+
 const { mdxAttribute } = require('./mdxast-builder');
+
+const createAST = (mdxText) => {
+  const mdxAst = unified()
+    .use(remarkParse)
+    .use(remarkStringify, {
+      bullet: '*',
+      fences: true,
+      listItemIndent: '1',
+    })
+    .use(remarkMdx)
+    .use(remarkMdxjs)
+    .use(remarkFrontmatter, ['yaml'])
+    .parse(mdxText);
+
+  return mdxAst;
+};
+
+const getNodeText = (el) => {
+  let text = '"';
+  visit(el, (node) => {
+    if (node.type !== 'text') return;
+    text += node.value;
+  });
+  text += '"';
+  return text;
+};
 
 const isType = curry((type, node) => node.type === type);
 
@@ -15,6 +49,9 @@ const isMdxSpanElement = curry(
 const isMdxElement = curry(
   (name, node) => isMdxBlockElement(name, node) || isMdxSpanElement(name, node)
 );
+
+const isEmptyParagraph = (el) =>
+  el.type === 'paragraph' && el.children.length === 0;
 
 const hasOnlyChild = curry(
   (name, node) => node.children.length === 1 && isType(name, node.children[0])
@@ -125,19 +162,22 @@ const containsImport = (tree, node) => {
 module.exports = {
   addAttribute,
   containsImport,
-  parseImport,
+  createAST,
+  findAttribute,
+  findChild,
   flatten,
+  getNodeText,
+  hasAttribute,
+  hasClassName,
+  hasOnlyChild,
+  isEmptyParagraph,
   isMdxBlockElement,
   isMdxElement,
   isMdxSpanElement,
   isPlainText,
-  hasAttribute,
-  findAttribute,
-  hasClassName,
-  hasOnlyChild,
-  findChild,
+  isType,
+  parseImport,
   removeAttribute,
   removeChild,
-  isType,
   setAttribute,
 };

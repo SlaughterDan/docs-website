@@ -1,37 +1,12 @@
-/* eslint-disable no-console */
-const { frontmatter, validateFreshnessDate } = require('../utils/frontmatter');
-const { verifyImageImports } = require('../utils/image-import-utils.js');
 const mdx = require('@mdx-js/mdx');
 const fs = require('fs');
 const colors = require('ansi-colors');
-const unified = require('unified');
-const remarkParse = require('remark-parse');
-const remarkMdx = require('remark-mdx');
-const remarkMdxjs = require('remark-mdxjs');
-const remarkStringify = require('remark-stringify');
-const remarkFrontmatter = require('remark-frontmatter');
 
-/**
- * Given an array of file paths, run our custom validators against the contents
- * and attempt to compile the MDX to JS for every file.
- *
- * @param {string[]} filePaths - the list of files to check
- * @param {object} options - lifecycle hooks for different stages of verifying
-
- */
-const verifyMDX = async (filePaths, { onFileChecked, onEnd }) => {
-  const allResults = await Promise.all(
-    filePaths.map(async (path, i) => {
-      const result = verifyFile(path);
-      await onFileChecked(result, i);
-      return result;
-    })
-  );
-  await onEnd();
-
-  const results = allResults.filter(Boolean);
-  return results;
-};
+const { createAST } = require('../../mdx-utils/mdxast');
+const { frontmatter, validateFreshnessDate } = require('../utils/frontmatter');
+const { verifyImageImports } = require('../utils/image-import-utils.js');
+const ERROR_TYPES = require('./error-types');
+const { validators } = require('./validators');
 
 /**
  * Given an array of file paths, determine if any image imports are unused
@@ -54,88 +29,67 @@ const verifyImages = (filePaths) => {
   }
 };
 
-const mdxErrors = [];
-
-const createAST = (mdxText) => {
-  const mdxAst = unified()
-    .use(remarkParse)
-    .use(remarkStringify, {
-      bullet: '*',
-      fences: true,
-      listItemIndent: '1',
-    })
-    .use(remarkMdx)
-    .use(remarkMdxjs)
-    .use(remarkFrontmatter, ['yaml'])
-    .parse(mdxText);
-
-  return mdxAst;
-};
-
-const verifyFile = async (filePath) => {
-  let failed = false;
-
+/**
+ * Given a file path, attempt to parse the MDX content to an AST
+ * and run our custom validators against it.
+ *
+ * @param {string[]} filePaths - the list of files to check
+ * @returns {object} an object containing the `filePath` and the list of errors
+ */
+const verifyMDX = (filePath) => {
   const mdxText = fs.readFileSync(filePath, 'utf8');
-  try {
-    const jsx = mdx.sync(mdxText);
-    const mdxAst = createAST(mdxText);
-    const { hasNonStepChild, nodeInfo } = verifyStepsChildren(mdxAst);
-    const errors = verifyTabs(mdxAst);
-    if (hasNonStepChild) {
-      const customError = {
-        reason:
-          '<Steps> component must only contain <Step> components as immediate children',
-        ...nodeInfo,
-      };
-      throw customError;
-    }
-  } catch (exception) {
-    console.log(exception);
-    mdxErrors.push(
-      colors.magenta(` MDX error: `) +
-        `${filePath} \n
-      ${colors.red(exception.reason)}
-    line: ${exception.line}
-    column: ${exception.column}`
-    );
+  let mdxAst;
+  let errors = [];
 
-    failed = true;
+  try {
+    mdxAst = createAST(mdxText);
+  } catch (exception) {
+    errors.push({
+      filePath: filePath,
+      reason: exception.reason,
+      line: exception.line,
+      column: exception.column,
+      type: ERROR_TYPES.MDX_ERROR,
+    });
   }
-  const excludeFromFreshnessRegex = [
-    'src/content/docs/release-notes/',
-    'src/content/whats-new/',
-    'src/content/docs/style-guide/',
-    'src/content/docs/security/new-relic-security/security-bulletins/',
-    'src/i18n/content/',
-  ];
-  const shouldValidateFreshnessDate = !excludeFromFreshnessRegex.some(
+
+  if (mdxAst != null) {
+    errors = validators.flatMap((validator) => validator(mdxAst));
+  }
+
+  const shouldValidateFreshnessDate = !excludeFromFreshnessPaths.some(
     (excludedPath) => filePath.includes(excludedPath)
   );
 
   const { error } = frontmatter(mdxText);
-
   if (error != null) {
-    mdxErrors.push(
-      colors.magenta(` Frontmatter error: `) +
-        `${filePath} \n
-      ${colors.red(error.reason)}
-    ${error.mark.snippet}`
-    );
-    failed = true;
-  } else if (shouldValidateFreshnessDate) {
+    errors.push({
+      reason: error.reason,
+      snippet: error.mark.snippet,
+      type: ERROR_TYPES.FRONTMATTER_ERROR,
+    });
+  }
+
+  if (shouldValidateFreshnessDate) {
     const error = validateFreshnessDate(mdxText);
-    if (error) {
-      mdxErrors.push(
-        colors.magenta(` Frontmatter field error: `) +
-          `${filePath} \n
-        ${colors.red(error.message)}`
-      );
-      failed = true;
+    if (error != null) {
+      errors.push({
+        reason: error.message,
+        type: ERROR_TYPES.FRONTMATTER_FIELD_ERROR,
+      });
     }
   }
 
-  return failed ? filePath : null;
+  return { filePath, errors };
 };
+
+const excludeFromFreshnessPaths = [
+  'src/content/docs/release-notes/',
+  'src/content/whats-new/',
+  'src/content/docs/style-guide/',
+  'src/content/docs/security/new-relic-security/security-bulletins/',
+  'src/i18n/content/',
+];
 
 module.exports = {
   verifyImages,
